@@ -51,11 +51,11 @@ class Manager
         return ($result && is_array($result)) ? $result : [];
     }
 
-    public function importTranslations($replace = false, $base = null, $import_group = false)
+    public function importTranslations($replace = false, $base = null, $nameSpace = null, $import_group = false)
     {
         $counter = 0;
         //allows for vendor lang files to be properly recorded through recursion.
-        $vendor = true;
+        $vendor = $nameSpace ? false : true;
         if ($base == null) {
             $base = $this->app['path.lang'];
             $vendor = false;
@@ -67,7 +67,7 @@ class Manager
             //import langfiles for each vendor
             if ($locale == 'vendor') {
                 foreach ($this->files->directories($langPath) as $vendor) {
-                    $counter += $this->importTranslations($replace, $vendor);
+                    $counter += $this->importTranslations($replace, $vendor, $nameSpace);
                 }
 
                 continue;
@@ -93,8 +93,12 @@ class Manager
                     $group = $subLangPath.'/'.$group;
                 }
 
-                if (! $vendor) {
-                    $translations = \Lang::getLoader()->load($locale, $group);
+                if (!$vendor) {
+                    if ($nameSpace == 'Default') {
+                        $translations = \Lang::getLoader()->load($locale, $group);
+                    } else {
+                        $translations = \Lang::getLoader()->load($locale, $group, $nameSpace);
+                    }
                 } else {
                     $translations = include $file;
                     $group = 'vendor/'.$vendorName;
@@ -102,7 +106,7 @@ class Manager
 
                 if ($translations && is_array($translations)) {
                     foreach (Arr::dot($translations) as $key => $value) {
-                        $importedTranslation = $this->importTranslation($key, $value, $locale, $group, $replace);
+                        $importedTranslation = $this->importTranslation($key, $value, $locale, $group, $replace, $nameSpace);
                         $counter += $importedTranslation ? 1 : 0;
                     }
                 }
@@ -119,7 +123,7 @@ class Manager
                 \Lang::getLoader()->load($locale, '*', '*'); // Retrieves JSON entries of the given locale only
             if ($translations && is_array($translations)) {
                 foreach ($translations as $key => $value) {
-                    $importedTranslation = $this->importTranslation($key, $value, $locale, $group, $replace);
+                    $importedTranslation = $this->importTranslation($key, $value, $locale, $group, $replace, $nameSpace);
                     $counter += $importedTranslation ? 1 : 0;
                 }
             }
@@ -128,7 +132,7 @@ class Manager
         return $counter;
     }
 
-    public function importTranslation($key, $value, $locale, $group, $replace = false)
+    public function importTranslation($key, $value, $locale, $group, $replace = false, $nameSpace = null)
     {
 
         // process only string values
@@ -138,8 +142,9 @@ class Manager
         $value = (string) $value;
         $translation = Translation::firstOrNew([
             'locale' => $locale,
-            'group'  => $group,
-            'key'    => $key,
+            'group' => $group,
+            'key' => $key,
+            'namespace' => $nameSpace,
         ]);
 
         // Check if the database is different then the files
@@ -250,10 +255,15 @@ class Manager
         }
     }
 
-    public function exportTranslations($group = null, $json = false)
+    public function exportTranslations($group = null, $json = false, $nameSpace = null, $base = null)
     {
         $group = basename($group);
-        $basePath = $this->app['path.lang'];
+
+        if ($nameSpace == 'Default') {
+            $basePath = $this->app['path.lang'];
+        } else {
+            $basePath = $this->app['path.lang'].'/vendor/'.$nameSpace;
+        }
 
         if (! is_null($group) && ! $json) {
             if (! in_array($group, $this->config['exclude_groups'])) {
@@ -267,7 +277,10 @@ class Manager
                 }
 
                 $models = [];
-                Translation::ofTranslatedGroup($group)
+
+                $translation = Translation::where('namespace', '=', $nameSpace);
+
+                $translation->ofTranslatedGroup($group)
                     ->orderByGroupKeys(Arr::get($this->config, 'sort_keys', false))
                     ->chunkById(50000, function ($chunk) use (&$models) {
                         $models = array_merge($models, $chunk->all());
@@ -279,7 +292,7 @@ class Manager
                     $locale = basename($locale);
                     if (isset($groups[$group])) {
                         $translations = $groups[$group];
-                        $path = $this->app['path.lang'];
+                        $path = $basePath;
 
                         $locale_path = $locale.DIRECTORY_SEPARATOR.$group;
                         if ($vendor) {
@@ -315,13 +328,13 @@ class Manager
 
         if ($json) {
             $tree = $this->makeTree(Translation::ofTranslatedGroup(self::JSON_GROUP)
-                                                ->orderByGroupKeys(Arr::get($this->config, 'sort_keys', false))
-                                                ->get(), true);
+                ->orderByGroupKeys(Arr::get($this->config, 'sort_keys', false))
+                ->get(), true);
 
             foreach ($tree as $locale => $groups) {
                 if (isset($groups[self::JSON_GROUP])) {
                     $translations = $groups[self::JSON_GROUP];
-                    $path = $this->app['path.lang'].'/'.$locale.'.json';
+                    $path = $basePath . '/' . $locale . '.json';
                     $output = json_encode($translations, \JSON_PRETTY_PRINT | \JSON_UNESCAPED_UNICODE);
                     $this->files->put($path, $output);
                 }
